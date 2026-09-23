@@ -1,0 +1,7 @@
+version = 1
+level = "safe"
+
+# Start conservatively. Change to "reconcile" or "full" after reviewing the
+# behavior with `git-fleet sync --dry-run`.
+[defaults]
+respect_leases = true
