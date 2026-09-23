@@ -1,0 +1,2 @@
+# slug	path	sync_mode	lease
+owner/example	$HOME/repos/example	auto	required
