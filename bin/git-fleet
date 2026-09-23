@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# git-fleet — policy-driven local repository fleet management.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+MODULE_ROOT="$ROOT/src/git_fleet"
+ENGINE="${GIT_FLEET_ENGINE:-$MODULE_ROOT/repo_sync.py}"
+SYNC="${GIT_FLEET_SYNC:-$MODULE_ROOT/sync.py}"
+POLICY="${GIT_FLEET_POLICY_CLI:-$MODULE_ROOT/policy.py}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/git-fleet"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/git-fleet"
+REGISTRY="${GIT_FLEET_REGISTRY:-$CONFIG_HOME/repos.tsv}"
+DYNAMIC_REGISTRY="${GIT_FLEET_DYNAMIC_REGISTRY:-$STATE_HOME/discovered-repos.tsv}"
+WATCHLIST="${GIT_FLEET_PR_WATCHLIST:-$STATE_HOME/pr-watches.tsv}"
+BASE_POLICY="${GIT_FLEET_POLICY:-$CONFIG_HOME/policy.toml}"
+POLICY_STATE="${GIT_FLEET_POLICY_STATE:-$STATE_HOME/policy.toml}"
+
+usage() {
+  cat <<'EOF'
+Usage: git-fleet <command> [args...]
+
+Inspection:
+  status       Inspect repository alignment without network access
+  dashboard    Show the interactive fleet dashboard
+  fetch        Fetch/prune and report alignment
+
+Reconciliation:
+  sync         Reconcile eligible repositories according to policy
+  policy       Show or change automation policy
+
+Examples:
+  git-fleet status
+  git-fleet fetch --registry-only
+  git-fleet sync --dry-run
+  git-fleet sync --only owner/repository
+  git-fleet policy show
+EOF
+}
+
+require_file() {
+  [[ -r "$1" ]] || { printf 'git-fleet: missing component: %s\n' "$1" >&2; exit 127; }
+}
+
+run_engine() {
+  local op="$1"; shift
+  require_file "$ENGINE"
+  exec python3 "$ENGINE" "$op" \
+    --registry "$REGISTRY" \
+    --dynamic-registry "$DYNAMIC_REGISTRY" \
+    --watchlist "$WATCHLIST" \
+    "$@"
+}
+
+cmd="${1:-help}"
+[[ $# -eq 0 ]] || shift
+case "$cmd" in
+  help|-h|--help) usage ;;
+  status) run_engine status "$@" ;;
+  dashboard) run_engine status --format dashboard --local-only "$@" ;;
+  fetch) run_engine fetch "$@" ;;
+  sync)
+    require_file "$SYNC"
+    export GIT_SYNC_ENGINE="$ENGINE"
+    export GIT_SYNC_MODULE_ROOT="$MODULE_ROOT"
+    export GIT_SYNC_POLICY_MODULE="$MODULE_ROOT/automation_policy.py"
+    exec python3 "$SYNC" \
+      --registry "$REGISTRY" \
+      --dynamic-registry "$DYNAMIC_REGISTRY" \
+      --policy "$BASE_POLICY" \
+      --policy-state "$POLICY_STATE" \
+      "$@"
+    ;;
+  policy)
+    require_file "$POLICY"
+    export GIT_FLEET_POLICY_MODULE="$MODULE_ROOT/automation_policy.py"
+    exec python3 "$POLICY" --policy "$BASE_POLICY" --state "$POLICY_STATE" "$@"
+    ;;
+  *)
+    printf 'git-fleet: unknown command: %s\n' "$cmd" >&2
+    printf 'Try: git-fleet --help\n' >&2
+    exit 2
+    ;;
+esac
