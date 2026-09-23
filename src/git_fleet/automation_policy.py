@@ -199,7 +199,7 @@ def validate_document(payload: Mapping[str, Any], *, source: Path | str) -> None
         raise PolicyError(
             f"{source}: policy version must be {POLICY_VERSION}, found {version!r}"
         )
-    level = payload.get("level", "full")
+    level = payload.get("level", "safe")
     if level not in LEVELS:
         raise PolicyError(f"{source}: unknown automation level: {level!r}")
     defaults = payload.get("defaults", {})
@@ -234,7 +234,7 @@ def validate_settings(settings: Mapping[str, Any], *, source: str) -> None:
 
 
 def merge_documents(base: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
-    level = state.get("level", base.get("level", "full"))
+    level = state.get("level", base.get("level", "safe"))
     defaults = dict(base.get("defaults", {}))
     defaults.update(state.get("defaults", {}))
     repositories: dict[str, dict[str, Any]] = {
