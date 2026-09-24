@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,18 @@ def load_policy_and_runner() -> tuple[Any, Any]:
 
 def parser(levels: tuple[str, ...]) -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument(
+        "target",
+        nargs="?",
+        choices=("wiki",),
+        help="named repository target (wiki = johnyoonh/obsidian-wiki)",
+    )
+    result.add_argument(
+        "--lane",
+        choices=("code", "full"),
+        default="full",
+        help="wiki lane: code reconciles Git only; full first runs the vault-safe cleaner",
+    )
     result.add_argument(
         "--registry",
         default=os.environ.get("GIT_FLEET_REGISTRY", os.environ.get("GIT_SYNC_REGISTRY", "~/.config/git-fleet/repos.tsv")),
@@ -150,6 +163,35 @@ def main(argv: list[str] | None = None) -> int:
         return 127
 
     args = parser(policy_module.LEVELS).parse_args(argv)
+    if getattr(args, "target", None) == "wiki" and getattr(args, "lane", "full") == "full":
+        wiki_cleaner = Path.home() / "repos/wiki-automation"
+        if wiki_cleaner.is_dir():
+            cleaner = [
+                "/opt/homebrew/bin/uv",
+                "run",
+                "--project",
+                str(wiki_cleaner),
+                "python",
+                "-m",
+                "wiki_automation.wiki_git.clean",
+                "--nightly",
+                "--no-push",
+                "--publish-partial-on-defer",
+            ]
+            if args.dry_run:
+                cleaner.append("--dry-run")
+            if args.json:
+                cleaner.append("--json")
+            wiki_root = Path(
+                os.environ.get(
+                    "WIKI_ROOT",
+                    Path.home()
+                    / "Library/Mobile Documents/iCloud~md~obsidian/Documents/wiki",
+                )
+            ).expanduser()
+            cleaned = subprocess.run(cleaner, cwd=wiki_root, check=False)
+            if cleaned.returncode != 0:
+                return cleaned.returncode
     try:
         cli_overrides = dict(
             policy_module.parse_assignment(value) for value in args.set
@@ -248,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
     requested = set(args.slug)
+    if getattr(args, "target", None) == "wiki":
+        requested.add("johnyoonh/obsidian-wiki")
     grouped: dict[str, list[Any]] = {}
     results: list[Any] = []
     for raw_path, (repo_policy, source) in entries.items():
