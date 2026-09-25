@@ -445,6 +445,22 @@ def load_registry(path: Path) -> dict[Path, RepoPolicy]:
     return policies
 
 
+def _resolve_git_path(repo: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = repo / path
+    return path.resolve()
+
+
+def is_linked_worktree(repo: Path) -> bool:
+    """Return True when repo is a linked Git worktree rather than its common checkout."""
+    git_dir = output(repo, "rev-parse", "--absolute-git-dir")
+    common_dir = output(repo, "rev-parse", "--git-common-dir")
+    if not git_dir or not common_dir:
+        return False
+    return _resolve_git_path(repo, git_dir) != _resolve_git_path(repo, common_dir)
+
+
 def discover_repositories(roots: list[Path]) -> list[Path]:
     repos: set[Path] = set()
     ignored = {".cache", ".venv", "node_modules", "Library", ".Trash"}
@@ -452,7 +468,8 @@ def discover_repositories(roots: list[Path]) -> list[Path]:
         if not root.is_dir():
             continue
         if (root / ".git").exists():
-            repos.add(root.resolve())
+            if not is_linked_worktree(root):
+                repos.add(root.resolve())
             continue
         for current, dirs, files in os.walk(root):
             dirs[:] = [name for name in dirs if name not in ignored]
@@ -461,7 +478,8 @@ def discover_repositories(roots: list[Path]) -> list[Path]:
                 repos.add(current_path.resolve())
                 dirs.remove(".git")
             elif ".git" in files:
-                repos.add(current_path.resolve())
+                if not is_linked_worktree(current_path):
+                    repos.add(current_path.resolve())
                 dirs[:] = []
     return sorted(repos)
 
