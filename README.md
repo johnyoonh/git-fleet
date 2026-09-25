@@ -35,6 +35,8 @@ Configuration defaults to `${XDG_CONFIG_HOME:-~/.config}/git-fleet` and runtime 
 
 The reconciliation engine does not use force-push or hard-reset as normal recovery mechanisms. Before rebasing divergent local history it creates a recovery ref, and dirty work is snapshotted before worktree mutation when policy allows it.
 
+Automatic root discovery ignores linked Git worktrees. Task worktrees are isolated execution surfaces, not generic fleet mutation targets; a linked worktree is touched only when it is explicitly registered or directly targeted.
+
 Start with `git-fleet sync --dry-run` and a small registry before enabling unattended reconciliation.
 
 ## License
