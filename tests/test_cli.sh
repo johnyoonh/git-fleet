@@ -18,4 +18,38 @@ assert data["defaults"]["mutate"] is True
 assert data["defaults"]["rebase_local"] is False
 PY
 
+DISCOVERY_ROOT="$TMP/discovery"
+PRIMARY="$TMP/primary"
+ORDINARY="$DISCOVERY_ROOT/ordinary"
+LINKED="$DISCOVERY_ROOT/task"
+mkdir -p "$DISCOVERY_ROOT"
+
+git init -q "$PRIMARY"
+git -C "$PRIMARY" config user.email "git-fleet-test@example.invalid"
+git -C "$PRIMARY" config user.name "git-fleet test"
+git -C "$PRIMARY" checkout -q -b main
+printf 'primary\n' > "$PRIMARY/README.md"
+git -C "$PRIMARY" add README.md
+git -C "$PRIMARY" commit -qm "init"
+
+git clone -q "$PRIMARY" "$ORDINARY"
+git -C "$PRIMARY" worktree add -q -b agent/test "$LINKED"
+
+python3 - "$ROOT" "$DISCOVERY_ROOT" "$ORDINARY" "$LINKED" <<'PY'
+from pathlib import Path
+import sys
+
+module_root = Path(sys.argv[1]) / "src" / "git_fleet"
+sys.path.insert(0, str(module_root))
+import repo_sync
+
+root = Path(sys.argv[2]).resolve()
+ordinary = Path(sys.argv[3]).resolve()
+linked = Path(sys.argv[4]).resolve()
+found = set(repo_sync.discover_repositories([root]))
+assert ordinary in found, found
+assert linked not in found, found
+assert repo_sync.discover_repositories([linked]) == []
+PY
+
 echo "git-fleet smoke tests passed"
