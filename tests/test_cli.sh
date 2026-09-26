@@ -33,6 +33,66 @@ effective = automation_policy.effective_policy(
 assert effective.publish is False
 PY
 
+PUBLISH_ORIGIN="$TMP/publish-origin.git"
+PUBLISH_SEED="$TMP/publish-seed"
+PUBLISH_CLONE="$TMP/publish-clone"
+mkdir -p "$PUBLISH_SEED"
+git init -q --bare "$PUBLISH_ORIGIN"
+git init -q -b main "$PUBLISH_SEED"
+git -C "$PUBLISH_SEED" config user.email "git-fleet-test@example.invalid"
+git -C "$PUBLISH_SEED" config user.name "git-fleet test"
+printf 'initial\n' > "$PUBLISH_SEED/file.txt"
+git -C "$PUBLISH_SEED" add file.txt
+git -C "$PUBLISH_SEED" commit -qm initial
+git -C "$PUBLISH_SEED" remote add origin "$PUBLISH_ORIGIN"
+git -C "$PUBLISH_SEED" push -q -u origin main
+git --git-dir="$PUBLISH_ORIGIN" symbolic-ref HEAD refs/heads/main
+git clone -q "$PUBLISH_ORIGIN" "$PUBLISH_CLONE"
+git -C "$PUBLISH_CLONE" config user.email "git-fleet-test@example.invalid"
+git -C "$PUBLISH_CLONE" config user.name "git-fleet test"
+printf 'publish-default\n' > "$PUBLISH_CLONE/default.txt"
+git -C "$PUBLISH_CLONE" add default.txt
+git -C "$PUBLISH_CLONE" commit -qm publish-default
+PUBLISH_HEAD=$(git -C "$PUBLISH_CLONE" rev-parse HEAD)
+PUBLISH_SLUG="${PUBLISH_ORIGIN%.git}"
+printf '%s\t%s\tauto\tignore\n' "$PUBLISH_SLUG" "$PUBLISH_CLONE" > "$TMP/publish-registry.tsv"
+cat > "$TMP/publish-policy.toml" <<'TOML'
+version = 1
+level = "full"
+TOML
+
+run_publish_sync() {
+  HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" \
+    GIT_FLEET_REGISTRY="$TMP/publish-registry.tsv" \
+    GIT_FLEET_DYNAMIC_REGISTRY="$TMP/discovered.tsv" \
+    GIT_FLEET_PR_WATCHLIST="$TMP/pr-watches.tsv" \
+    GIT_FLEET_POLICY="$TMP/publish-policy.toml" \
+    GIT_FLEET_POLICY_STATE="$TMP/publish-state.toml" \
+    GIT_FLEET_STATE_DIR="$TMP/repo-sync-state" \
+    "$ROOT/bin/git-fleet" sync --registry-only --repo "$PUBLISH_CLONE" --json "$@"
+}
+
+if ! run_publish_sync > "$TMP/publish-default.jsonl"; then
+  cat "$TMP/publish-default.jsonl" >&2
+  exit 1
+fi
+grep -q '"event": "PUBLISHED"' "$TMP/publish-default.jsonl"
+[[ "$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)" == "$PUBLISH_HEAD" ]]
+
+printf 'publish-disabled\n' > "$PUBLISH_CLONE/disabled.txt"
+git -C "$PUBLISH_CLONE" add disabled.txt
+git -C "$PUBLISH_CLONE" commit -qm publish-disabled
+DISABLED_HEAD=$(git -C "$PUBLISH_CLONE" rev-parse HEAD)
+PUBLISH_REMOTE_BEFORE=$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)
+if ! run_publish_sync --set publish=false > "$TMP/publish-disabled.jsonl"; then
+  cat "$TMP/publish-disabled.jsonl" >&2
+  exit 1
+fi
+grep -q 'publication disabled by policy' "$TMP/publish-disabled.jsonl"
+! grep -q '"event": "PUBLISHED"' "$TMP/publish-disabled.jsonl"
+[[ "$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)" == "$PUBLISH_REMOTE_BEFORE" ]]
+[[ "$(git -C "$PUBLISH_CLONE" rev-parse HEAD)" == "$DISABLED_HEAD" ]]
+
 DISCOVERY_ROOT="$TMP/discovery"
 PRIMARY="$TMP/primary"
 ORDINARY="$DISCOVERY_ROOT/ordinary"
