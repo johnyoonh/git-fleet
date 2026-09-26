@@ -1,8 +1,8 @@
 """Automatic non-force publication layer for repo sync.
 
 Loaded after the retained sync implementation and dirty-work checkpoint layer.
-Every repository that is eligible for worktree reconciliation also publishes
-committed default-branch work when it is safely ahead of origin.
+Repositories whose effective policy enables publication push committed
+default-branch work when it is safely ahead of origin.
 """
 
 from __future__ import annotations
@@ -44,6 +44,10 @@ def _publish_after_sync(
     dry_run: bool,
 ) -> Any:
     if result.event in _BLOCKED_EVENTS or not result.upstream:
+        return result
+
+    if not candidate.automation.publish:
+        _append_detail(result, "publication disabled by policy")
         return result
 
     target_branch = _remote_branch(result.upstream)
