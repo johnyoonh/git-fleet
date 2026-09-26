@@ -20,6 +20,7 @@ BOOL_KEYS = {
     "recover_detached",
     "respect_leases",
     "submodules",
+    "publish",
 }
 ENUM_KEYS = {
     "conflict_strategy": {"llm", "local", "stop"},
@@ -73,6 +74,7 @@ class AutomationPolicy:
     duplicate_strategy: str
     respect_leases: bool
     submodules: bool = False
+    publish: bool = True
 
     def json_record(self) -> dict[str, object]:
         return asdict(self)
@@ -126,6 +128,7 @@ PROFILES: dict[str, AutomationPolicy] = {
         conflict_strategy="stop",
         duplicate_strategy="first",
         respect_leases=True,
+        publish=False,
     ),
 }
 

@@ -31,6 +31,12 @@ git-fleet policy show
 
 Configuration defaults to `${XDG_CONFIG_HOME:-~/.config}/git-fleet` and runtime state defaults to `${XDG_STATE_HOME:-~/.local/state}/git-fleet`.
 
+The `publish` policy setting controls whether a successful reconciliation may
+push committed default-branch work to `origin`. It defaults to `true` for
+mutating profiles and `false` for fetch-only; set `publish = false` globally
+or for a repository to keep reconciliation pull-only while retaining local
+commits.
+
 ## Safety model
 
 The reconciliation engine does not use force-push or hard-reset as normal recovery mechanisms. Before rebasing divergent local history it creates a recovery ref, and dirty work is snapshotted before worktree mutation when policy allows it.

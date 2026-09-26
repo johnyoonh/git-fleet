@@ -16,6 +16,21 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["level"] == "safe", data
 assert data["defaults"]["mutate"] is True
 assert data["defaults"]["rebase_local"] is False
+assert data["defaults"]["publish"] is True
+PY
+
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "src" / "git_fleet"))
+import automation_policy
+
+assert automation_policy.PROFILES["fetch"].publish is False
+effective = automation_policy.effective_policy(
+    {"level": "full", "repositories": {"example/repo": {"publish": False}}},
+    slug="example/repo",
+)
+assert effective.publish is False
 PY
 
 DISCOVERY_ROOT="$TMP/discovery"
