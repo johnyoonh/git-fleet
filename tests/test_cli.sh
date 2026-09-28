@@ -127,4 +127,113 @@ assert linked not in found, found
 assert repo_sync.discover_repositories([linked]) == []
 PY
 
+python3 - "$ROOT" "$TMP" <<'PY'
+from pathlib import Path
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone, timedelta
+
+module_root = Path(sys.argv[1]) / "src" / "git_fleet"
+sys.path.insert(0, str(module_root))
+import repo_sync
+import sync_checkpoint
+
+tmp = Path(sys.argv[2])
+os.environ["AISESS_STATE_DIR"] = str(tmp / "aisess")
+os.environ["GIT_FLEET_STATE_DIR"] = str(tmp / "git-fleet-state")
+
+fake_repo = tmp / "fake-lease-repo"
+fake_repo.mkdir(parents=True, exist_ok=True)
+
+# 1. Lease staleness test
+now = datetime.now(timezone.utc).isoformat()
+lease_dir = tmp / "aisess" / "repo-leases" / repo_sync.repo_key(fake_repo)
+lease_dir.mkdir(parents=True, exist_ok=True)
+lease_file = lease_dir / f"{os.getpid()}.json"
+old = (datetime.now(timezone.utc) - timedelta(seconds=1200)).isoformat()
+lease_file.write_text(json.dumps({
+    "pid": os.getpid(),
+    "session_id": "sess-stale-test",
+    "model": "gpt-5-turbo",
+    "started_at": old,
+    "heartbeat_at": old,
+}))
+
+leases = repo_sync.live_aisess_leases(fake_repo, max_idle=900)
+assert len(leases) == 0, leases  # Evicted!
+assert not lease_file.exists()
+last = repo_sync.last_lease_metadata(fake_repo)
+assert last is not None
+assert last["session_id"] == "sess-stale-test"
+assert last["eviction_reason"] == "stale_lease"
+
+# 2. Checkpoint WIP quality gate & session trailers
+check_repo = tmp / "check-wip-repo"
+check_repo.mkdir(parents=True, exist_ok=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(check_repo)], check=True)
+subprocess.run(["git", "-C", str(check_repo), "config", "user.email", "test@example.invalid"], check=True)
+subprocess.run(["git", "-C", str(check_repo), "config", "user.name", "test user"], check=True)
+(check_repo / "doc.txt").write_text("v1\n")
+subprocess.run(["git", "-C", str(check_repo), "add", "doc.txt"], check=True)
+subprocess.run(["git", "-C", str(check_repo), "commit", "-qm", "init"], check=True)
+
+(check_repo / "doc.txt").write_text("v2\n")
+wip_dir = check_repo / ".local"
+wip_dir.mkdir(parents=True, exist_ok=True)
+wip_file = wip_dir / "wip-state.json"
+wip_file.write_text(json.dumps({
+    "schemaVersion": 1,
+    "sessionId": "sess-abc-789",
+    "agent": "codex-cli",
+    "purpose": "verify session trailer checkpointing",
+    "testsPassed": False,
+}))
+
+class MockCandidate:
+    class Policy:
+        path = str(check_repo)
+        slug = "test/check-wip-repo"
+    class Automation:
+        respect_leases = True
+    policy = Policy()
+    automation = Automation()
+
+class MockRunner:
+    def remote_default_branch(self, engine, r):
+        return "main", ""
+
+sync_checkpoint.CHECKPOINT_DIRTY = True
+sha, detail = sync_checkpoint._checkpoint_dirty_work(
+    repo_sync,
+    MockRunner(),
+    MockCandidate(),
+    dry_run=False,
+)
+assert sha == "", f"Expected empty sha, got {sha}"
+assert "reports tests failed" in detail, detail
+
+wip_file.write_text(json.dumps({
+    "schemaVersion": 1,
+    "sessionId": "sess-abc-789",
+    "agent": "codex-cli",
+    "purpose": "verify session trailer checkpointing",
+    "testsPassed": True,
+}))
+
+sha, detail = sync_checkpoint._checkpoint_dirty_work(
+    repo_sync,
+    MockRunner(),
+    MockCandidate(),
+    dry_run=False,
+)
+assert sha != "", "Expected commit sha"
+assert "sess-abc-789" in detail, detail
+commit_body = subprocess.check_output(["git", "-C", str(check_repo), "log", "-1", "--format=%B"], text=True)
+assert "Session-ID: sess-abc-789" in commit_body
+assert "Agent: codex-cli" in commit_body
+assert "Wip-Purpose: verify session trailer checkpointing" in commit_body
+PY
+
 echo "git-fleet smoke tests passed"

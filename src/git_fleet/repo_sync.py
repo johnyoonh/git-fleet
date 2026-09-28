@@ -354,10 +354,63 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def live_aisess_leases(repo: Path) -> list[dict[str, object]]:
+DEFAULT_LEASE_MAX_IDLE_SECONDS = 900.0  # 15 minutes
+
+
+def lease_max_idle_seconds() -> float:
+    raw = os.environ.get("GIT_FLEET_LEASE_MAX_IDLE_SECONDS") or os.environ.get("AISESS_LEASE_MAX_IDLE_SECONDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_LEASE_MAX_IDLE_SECONDS
+    try:
+        val = float(raw.strip())
+        return val if val > 0 else 0.0
+    except ValueError:
+        return DEFAULT_LEASE_MAX_IDLE_SECONDS
+
+
+def lease_is_stale(data: dict[str, object], max_idle: float) -> bool:
+    if max_idle <= 0:
+        return False
+    ts_str = str(data.get("heartbeat_at") or data.get("started_at") or "").strip()
+    if not ts_str:
+        return False
+    try:
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        idle = (datetime.now(timezone.utc) - ts).total_seconds()
+        return idle > max_idle
+    except Exception:
+        return False
+
+
+def save_last_lease_metadata(repo: Path, data: dict[str, object], reason: str) -> None:
+    directory = state_root() / "last-lease"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{repo_key(repo)}.json"
+    record = dict(data)
+    record["evicted_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    record["eviction_reason"] = reason
+    try:
+        target.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def last_lease_metadata(repo: Path) -> dict[str, object] | None:
+    target = state_root() / "last-lease" / f"{repo_key(repo)}.json"
+    if not target.is_file():
+        return None
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def live_aisess_leases(repo: Path, max_idle: float | None = None) -> list[dict[str, object]]:
     directory = aisess_state_root() / "repo-leases" / repo_key(repo)
     if not directory.exists():
         return []
+    if max_idle is None:
+        max_idle = lease_max_idle_seconds()
     leases: list[dict[str, object]] = []
     for path in sorted(directory.glob("*.json")):
         try:
@@ -367,6 +420,11 @@ def live_aisess_leases(repo: Path) -> list[dict[str, object]]:
             path.unlink(missing_ok=True)
             continue
         if not pid_alive(pid):
+            save_last_lease_metadata(repo, data, "dead_pid")
+            path.unlink(missing_ok=True)
+            continue
+        if lease_is_stale(data, max_idle):
+            save_last_lease_metadata(repo, data, "stale_lease")
             path.unlink(missing_ok=True)
             continue
         data["lease_file"] = str(path)

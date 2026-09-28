@@ -5,13 +5,19 @@ Loaded into the existing sync command namespace after the retained implementatio
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+from pathlib import Path
+from typing import Any
+
 
 CHECKPOINT_DIRTY = os.environ.get("GIT_SYNC_CHECKPOINT_DIRTY", "").strip().lower() in {
     "1", "true", "yes", "on"
 }
 CHECKPOINT_MESSAGE = "chore(git-fleet): checkpoint local work"
-_ORIGINAL_PARSER = parser
-_ORIGINAL_LOAD_POLICY_AND_RUNNER = load_policy_and_runner
+_ORIGINAL_PARSER = globals().get("parser", lambda levels: argparse.ArgumentParser())
+_ORIGINAL_LOAD_POLICY_AND_RUNNER = globals().get("load_policy_and_runner", lambda: (None, None))
 
 
 class _CheckpointDirtyAction(argparse.Action):
@@ -112,7 +118,49 @@ def _checkpoint_dirty_work(
         if staged.returncode != 0:
             _restore_index(engine, repo, original_index)
             return "", "error: checkpoint staging failed: " + (staged.stderr or staged.stdout or "git add failed").strip()[-500:]
-        committed = engine.run(repo, "commit", "-m", CHECKPOINT_MESSAGE)
+        # Inspect WIP state contract if present
+        wip_file = repo / ".local" / "wip-state.json"
+        wip_data: dict[str, Any] | None = None
+        if wip_file.is_file():
+            try:
+                wip_data = json.loads(wip_file.read_text(encoding="utf-8"))
+            except Exception:
+                wip_data = None
+
+        if wip_data and wip_data.get("testsPassed") is False:
+            return "", "error: checkpoint rejected: .local/wip-state.json reports tests failed"
+
+        last_lease: dict[str, Any] | None = None
+        if hasattr(engine, "last_lease_metadata"):
+            last_lease = engine.last_lease_metadata(repo)
+
+        session_id = None
+        agent = None
+        purpose = None
+        if wip_data:
+            session_id = wip_data.get("sessionId") or wip_data.get("session_id")
+            agent = wip_data.get("agent") or wip_data.get("agentModel") or wip_data.get("model")
+            purpose = wip_data.get("purpose")
+        if not session_id and last_lease:
+            session_id = last_lease.get("session_id")
+        if not agent and last_lease:
+            agent = last_lease.get("model") or last_lease.get("preset")
+
+        trailers: list[str] = []
+        if session_id:
+            trailers.append(f"Session-ID: {session_id}")
+        if agent:
+            trailers.append(f"Agent: {agent}")
+        if purpose:
+            trailers.append(f"Wip-Purpose: {purpose}")
+        if last_lease and last_lease.get("eviction_reason") == "stale_lease":
+            trailers.append("Lease-Stale: true")
+
+        commit_message = CHECKPOINT_MESSAGE
+        if trailers:
+            commit_message = f"{CHECKPOINT_MESSAGE}\n\n" + "\n".join(trailers)
+
+        committed = engine.run(repo, "commit", "-m", commit_message)
         if committed.returncode != 0:
             _restore_index(engine, repo, original_index)
             return "", (
@@ -120,7 +168,10 @@ def _checkpoint_dirty_work(
                 + (committed.stderr or committed.stdout or "git commit failed").strip()[-500:]
             )
         sha = engine.output(repo, "rev-parse", "HEAD")
-        return sha, f"checkpointed dirty work as {sha[:12]}"
+        detail = f"checkpointed dirty work as {sha[:12]}"
+        if session_id:
+            detail += f" (session {session_id})"
+        return sha, detail
 
 
 def load_policy_and_runner() -> tuple[Any, Any]:
