@@ -43,6 +43,8 @@ The reconciliation engine does not use force-push or hard-reset as normal recove
 
 Automatic root discovery ignores linked Git worktrees. Task worktrees are isolated execution surfaces, not generic fleet mutation targets; a linked worktree is touched only when it is explicitly registered or directly targeted.
 
+The default lifecycle is therefore task-worktree verification plus canonical-checkout synchronization. Repositories that can safely exercise a real runtime may opt into candidate deployment, rollback, repair, and required live verification with a repository-owned `.git-fleet/lifecycle.toml` adapter. See [Repository lifecycle contract](docs/REPOSITORY_LIFECYCLE.md).
+
 Start with `git-fleet sync --dry-run` and a small registry before enabling unattended reconciliation.
 
 ## License
