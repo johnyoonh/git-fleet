@@ -16,7 +16,7 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["level"] == "safe", data
 assert data["defaults"]["mutate"] is True
 assert data["defaults"]["rebase_local"] is False
-assert data["defaults"]["publish"] is True
+assert data["defaults"]["publish"] is False
 PY
 
 python3 - "$ROOT" <<'PY'
@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, str(Path(sys.argv[1]) / "src" / "git_fleet"))
 import automation_policy
 
-assert automation_policy.PROFILES["fetch"].publish is False
+assert all(profile.publish is False for profile in automation_policy.PROFILES.values())
 effective = automation_policy.effective_policy(
     {"level": "full", "repositories": {"example/repo": {"publish": False}}},
     slug="example/repo",
@@ -72,11 +72,21 @@ run_publish_sync() {
     "$ROOT/bin/git-fleet" sync --registry-only --repo "$PUBLISH_CLONE" --json "$@"
 }
 
+PUBLISH_ORIGIN_INITIAL=$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)
 if ! run_publish_sync > "$TMP/publish-default.jsonl"; then
   cat "$TMP/publish-default.jsonl" >&2
   exit 1
 fi
-grep -q '"event": "PUBLISHED"' "$TMP/publish-default.jsonl"
+grep -q 'publication disabled by policy' "$TMP/publish-default.jsonl"
+! grep -q '"event": "PUBLISHED"' "$TMP/publish-default.jsonl"
+[[ "$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)" == "$PUBLISH_ORIGIN_INITIAL" ]]
+[[ "$(git -C "$PUBLISH_CLONE" rev-parse HEAD)" == "$PUBLISH_HEAD" ]]
+
+if ! run_publish_sync --set publish=true > "$TMP/publish-opt-in.jsonl"; then
+  cat "$TMP/publish-opt-in.jsonl" >&2
+  exit 1
+fi
+grep -q '"event": "PUBLISHED"' "$TMP/publish-opt-in.jsonl"
 [[ "$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)" == "$PUBLISH_HEAD" ]]
 
 printf 'publish-disabled\n' > "$PUBLISH_CLONE/disabled.txt"
