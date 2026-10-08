@@ -12,6 +12,7 @@ from reconcile_git import (
     ref_exists,
     remote_default_branch,
     run_hook,
+    set_branch_upstream,
     submodule_pointer_drift_is_safe,
     switch_to_branch,
     tail,
@@ -368,14 +369,13 @@ def sync_one(
                     **base,
                 )
         else:
-            tracked = engine.run(
+            tracked, tracking_error = set_branch_upstream(
+                engine,
                 repo,
-                "branch",
-                "--set-upstream-to",
-                target_remote,
-                target_branch,
+                branch=target_branch,
+                remote_ref=target_remote,
             )
-            if tracked.returncode != 0:
+            if not tracked:
                 restore_snapshot(
                     engine,
                     repo,
@@ -388,10 +388,7 @@ def sync_one(
                     branch=target_branch,
                     upstream=target_remote,
                     old_head=old_head,
-                    detail=(
-                        tail(tracked.stderr or tracked.stdout)
-                        or "could not set branch upstream"
-                    ),
+                    detail=tracking_error or "could not set branch upstream",
                     **base,
                 )
 

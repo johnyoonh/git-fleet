@@ -288,6 +288,33 @@ assert default_branch == "main", (default_branch, default_branch_error)
 assert not default_branch_error, default_branch_error
 assert reconcile_git.ref_exists(repo_sync, default_clone, "refs/remotes/origin/main")
 assert repo_sync.output(default_clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD") == "origin/main"
+switched, switch_error = reconcile_git.switch_to_branch(
+    repo_sync,
+    default_clone,
+    branch=default_branch,
+    remote_ref=f"origin/{default_branch}",
+)
+assert switched, switch_error
+current_branch = repo_sync.output(default_clone, "branch", "--show-current")
+assert current_branch == "main", current_branch
+upstream = repo_sync.output(default_clone, "rev-parse", "--abbrev-ref", "@{upstream}")
+assert upstream == "origin/main", (
+    upstream,
+    repo_sync.output(default_clone, "config", "--get", "branch.main.remote"),
+    repo_sync.output(default_clone, "config", "--get", "branch.main.merge"),
+    repo_sync.output(default_clone, "show-ref"),
+)
+wide_clone = tmp / "default-branch-wide-clone"
+subprocess.run([
+    "git", "clone", "-q", "--branch", "feature/minutos",
+    str(default_origin), str(wide_clone),
+], check=True)
+wide_branch, wide_error = reconcile_git.remote_default_branch(repo_sync, wide_clone)
+assert wide_branch == "main", (wide_branch, wide_error)
+assert not wide_error, wide_error
+assert repo_sync.output(wide_clone, "config", "--get-all", "remote.origin.fetch") == (
+    "+refs/heads/*:refs/remotes/origin/*"
+)
 
 # An incomplete stash must be restored if a dirty submodule keeps the
 # superproject worktree from becoming clean.
