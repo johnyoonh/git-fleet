@@ -227,10 +227,17 @@ import repo_sync
 root = Path(sys.argv[2]).resolve()
 ordinary = Path(sys.argv[3]).resolve()
 linked = Path(sys.argv[4]).resolve()
+for cached_repo in (
+    root / ".build" / "checkouts" / "CachedSwiftPackage",
+    root / "build" / "DerivedData" / "SourcePackages" / "checkouts" / "CachedSwiftPackage",
+):
+    (cached_repo / ".git").mkdir(parents=True)
 found = set(repo_sync.discover_repositories([root]))
 assert ordinary in found, found
 assert linked not in found, found
 assert repo_sync.discover_repositories([linked]) == []
+assert not any(str(repo).startswith(str(root / ".build")) for repo in found), found
+assert not any("/DerivedData/" in str(repo) for repo in found), found
 PY
 
 python3 - "$ROOT" "$TMP" <<'PY'

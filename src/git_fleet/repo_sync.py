@@ -521,7 +521,15 @@ def is_linked_worktree(repo: Path) -> bool:
 
 def discover_repositories(roots: list[Path]) -> list[Path]:
     repos: set[Path] = set()
-    ignored = {".cache", ".venv", "node_modules", "Library", ".Trash"}
+    ignored = {
+        ".build",
+        ".cache",
+        ".venv",
+        "DerivedData",
+        "node_modules",
+        "Library",
+        ".Trash",
+    }
     for root in roots:
         if not root.is_dir():
             continue
