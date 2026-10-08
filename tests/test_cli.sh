@@ -253,10 +253,41 @@ sys.path.insert(0, str(module_root))
 import repo_sync
 import sync_checkpoint
 import reconcile_worktree
+import reconcile_git
 
 tmp = Path(sys.argv[2])
 os.environ["AISESS_STATE_DIR"] = str(tmp / "aisess")
 os.environ["GIT_FLEET_STATE_DIR"] = str(tmp / "git-fleet-state")
+
+# A narrow clone may know the remote default branch from its advertised HEAD
+# while lacking that branch's remote-tracking ref locally.
+default_origin = tmp / "default-branch-origin.git"
+default_seed = tmp / "default-branch-seed"
+default_clone = tmp / "default-branch-clone"
+subprocess.run(["git", "init", "-q", "--bare", str(default_origin)], check=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(default_seed)], check=True)
+subprocess.run(["git", "-C", str(default_seed), "config", "user.email", "test@example.invalid"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "config", "user.name", "test user"], check=True)
+(default_seed / "default.txt").write_text("default branch\n")
+subprocess.run(["git", "-C", str(default_seed), "add", "default.txt"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "commit", "-qm", "main"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "remote", "add", "origin", str(default_origin)], check=True)
+subprocess.run(["git", "-C", str(default_seed), "push", "-q", "origin", "main"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "switch", "-qc", "feature/minutos"], check=True)
+(default_seed / "feature.txt").write_text("feature branch\n")
+subprocess.run(["git", "-C", str(default_seed), "add", "feature.txt"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "commit", "-qm", "feature"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "push", "-q", "origin", "feature/minutos"], check=True)
+subprocess.run(["git", "--git-dir", str(default_origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+subprocess.run([
+    "git", "clone", "-q", "--branch", "feature/minutos", "--single-branch",
+    str(default_origin), str(default_clone),
+], check=True)
+default_branch, default_branch_error = reconcile_git.remote_default_branch(repo_sync, default_clone)
+assert default_branch == "main", (default_branch, default_branch_error)
+assert not default_branch_error, default_branch_error
+assert reconcile_git.ref_exists(repo_sync, default_clone, "refs/remotes/origin/main")
+assert repo_sync.output(default_clone, "symbolic-ref", "--short", "refs/remotes/origin/HEAD") == "origin/main"
 
 # An incomplete stash must be restored if a dirty submodule keeps the
 # superproject worktree from becoming clean.

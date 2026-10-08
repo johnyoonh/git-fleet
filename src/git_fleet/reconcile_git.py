@@ -63,6 +63,19 @@ def remote_default_branch(engine: Any, repo: Path) -> tuple[str, str]:
         )
         if match is not None:
             branch = match.group(1)
+            remote_ref = f"refs/remotes/origin/{branch}"
+            if not ref_exists(engine, repo, remote_ref):
+                fetched = engine.run(
+                    repo,
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    f"+refs/heads/{branch}:{remote_ref}",
+                )
+                if fetched.returncode != 0:
+                    return "", tail(fetched.stderr or fetched.stdout) or (
+                        f"could not fetch origin default branch {branch}"
+                    )
             cached = engine.run(repo, "remote", "set-head", "origin", branch)
             if cached.returncode != 0:
                 return "", tail(cached.stderr or cached.stdout) or "could not cache origin HEAD"
