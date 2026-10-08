@@ -98,6 +98,10 @@ def snapshot_local_work(engine: Any, repo: Path) -> tuple[LocalSnapshot | None, 
         engine.output(repo, "ls-files", "--others", "--exclude-standard", "-z")
     )
     message = f"git-fleet local snapshot {engine.timestamp()}"
+    stash_before = engine.output(repo, "rev-parse", "refs/stash")
+    stash_reflog_before = engine.output(
+        repo, "reflog", "show", "--format=%H", "refs/stash"
+    )
     stashed = engine.run(
         repo,
         "stash",
@@ -110,7 +114,32 @@ def snapshot_local_work(engine: Any, repo: Path) -> tuple[LocalSnapshot | None, 
         return None, tail(stashed.stderr or stashed.stdout) or "could not snapshot local work"
     ref = engine.output(repo, "rev-parse", "refs/stash")
     if not ref or engine.output(repo, "status", "--porcelain"):
-        return None, "local snapshot did not produce a clean worktree"
+        stash_reflog_after = engine.output(
+            repo, "reflog", "show", "--format=%H", "refs/stash"
+        )
+        message_after = engine.output(repo, "show", "-s", "--format=%s", ref) if ref else ""
+        reflog_grew = len(stash_reflog_after.splitlines()) > len(
+            stash_reflog_before.splitlines()
+        )
+        snapshot_created = bool(
+            ref
+            and message_after.endswith(message)
+            and (ref != stash_before or reflog_grew)
+        )
+        detail = "local snapshot did not produce a clean worktree"
+        if snapshot_created:
+            restored, restore_detail = restore_local_work(
+                engine,
+                repo,
+                LocalSnapshot(ref=ref, untracked=untracked),
+                conflict_strategy="local",
+                resolver_timeout=0,
+            )
+            if restored:
+                detail += "; partial snapshot restored"
+            else:
+                detail += f"; snapshot retained at {ref[:12]}: {restore_detail}"
+        return None, detail
     return LocalSnapshot(ref=ref, untracked=untracked), ""
 
 

@@ -252,10 +252,76 @@ module_root = Path(sys.argv[1]) / "src" / "git_fleet"
 sys.path.insert(0, str(module_root))
 import repo_sync
 import sync_checkpoint
+import reconcile_worktree
 
 tmp = Path(sys.argv[2])
 os.environ["AISESS_STATE_DIR"] = str(tmp / "aisess")
 os.environ["GIT_FLEET_STATE_DIR"] = str(tmp / "git-fleet-state")
+
+# An incomplete stash must be restored if a dirty submodule keeps the
+# superproject worktree from becoming clean.
+snapshot_origin = tmp / "snapshot-submodule-origin.git"
+snapshot_seed = tmp / "snapshot-submodule-seed"
+snapshot_repo = tmp / "snapshot-parent"
+subprocess.run(["git", "init", "-q", "--bare", str(snapshot_origin)], check=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(snapshot_seed)], check=True)
+subprocess.run(["git", "-C", str(snapshot_seed), "config", "user.email", "test@example.invalid"], check=True)
+subprocess.run(["git", "-C", str(snapshot_seed), "config", "user.name", "test user"], check=True)
+(snapshot_seed / "child.txt").write_text("child base\n")
+subprocess.run(["git", "-C", str(snapshot_seed), "add", "child.txt"], check=True)
+subprocess.run(["git", "-C", str(snapshot_seed), "commit", "-qm", "child base"], check=True)
+subprocess.run(["git", "-C", str(snapshot_seed), "remote", "add", "origin", str(snapshot_origin)], check=True)
+subprocess.run(["git", "-C", str(snapshot_seed), "push", "-q", "-u", "origin", "main"], check=True)
+subprocess.run(["git", "--git-dir", str(snapshot_origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+subprocess.run(["git", "init", "-q", "-b", "main", str(snapshot_repo)], check=True)
+subprocess.run(["git", "-C", str(snapshot_repo), "config", "user.email", "test@example.invalid"], check=True)
+subprocess.run(["git", "-C", str(snapshot_repo), "config", "user.name", "test user"], check=True)
+(snapshot_repo / "parent.txt").write_text("parent base\n")
+subprocess.run(["git", "-C", str(snapshot_repo), "add", "parent.txt"], check=True)
+subprocess.run([
+    "git", "-C", str(snapshot_repo), "-c", "protocol.file.allow=always",
+    "submodule", "add", "-q", str(snapshot_origin), "dependency",
+], check=True)
+subprocess.run(["git", "-C", str(snapshot_repo), "add", ".gitmodules", "dependency"], check=True)
+subprocess.run(["git", "-C", str(snapshot_repo), "commit", "-qm", "parent base"], check=True)
+if (snapshot_repo / ".gitignore").exists():
+    subprocess.run(["git", "-C", str(snapshot_repo), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(snapshot_repo), "commit", "-qm", "fixture ignore"], check=True)
+(snapshot_repo / "parent.txt").write_text("parent local work\n")
+(snapshot_repo / "untracked.txt").write_text("untracked local work\n")
+(snapshot_repo / "dependency" / "child.txt").write_text("child local work\n")
+stash_before = subprocess.check_output(
+    ["git", "-C", str(snapshot_repo), "stash", "list", "--format=%H"], text=True
+)
+snapshot, snapshot_error = reconcile_worktree.snapshot_local_work(repo_sync, snapshot_repo)
+assert snapshot is None, snapshot
+assert "clean worktree" in snapshot_error, snapshot_error
+assert (snapshot_repo / "parent.txt").read_text() == "parent local work\n"
+assert (snapshot_repo / "untracked.txt").read_text() == "untracked local work\n"
+assert (snapshot_repo / "dependency" / "child.txt").read_text() == "child local work\n"
+stash_after = subprocess.check_output(
+    ["git", "-C", str(snapshot_repo), "stash", "list", "--format=%H"], text=True
+)
+assert stash_after == stash_before, (stash_before, stash_after)
+
+# When only the submodule is dirty, leave an older stash completely untouched.
+(snapshot_repo / "parent.txt").write_text("saved in prior stash\n")
+subprocess.run([
+    "git", "-C", str(snapshot_repo), "stash", "push", "--include-untracked",
+    "--message", "preexisting snapshot sentinel",
+], check=True)
+preexisting_stash = subprocess.check_output(
+    ["git", "-C", str(snapshot_repo), "rev-parse", "refs/stash"], text=True
+).strip()
+(snapshot_repo / "dependency" / "child.txt").write_text("child dirty only\n")
+snapshot, snapshot_error = reconcile_worktree.snapshot_local_work(repo_sync, snapshot_repo)
+assert snapshot is None, snapshot
+assert "clean worktree" in snapshot_error, snapshot_error
+assert subprocess.check_output(
+    ["git", "-C", str(snapshot_repo), "rev-parse", "refs/stash"], text=True
+).strip() == preexisting_stash
+assert (snapshot_repo / "parent.txt").read_text() == "parent base\n"
+assert (snapshot_repo / "dependency" / "child.txt").read_text() == "child dirty only\n"
 
 fake_repo = tmp / "fake-lease-repo"
 fake_repo.mkdir(parents=True, exist_ok=True)
