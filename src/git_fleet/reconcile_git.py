@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,18 @@ def git_run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def ref_exists(engine: Any, repo: Path, ref: str) -> bool:
     return engine.run(repo, "show-ref", "--verify", "--quiet", ref).returncode == 0
+
+
+def fetch_refspec_maps(refspec: str, source: str, destination: str) -> bool:
+    if refspec.startswith("^"):
+        return False
+    value = refspec.removeprefix("+")
+    if ":" not in value:
+        return False
+    source_pattern, destination_pattern = value.split(":", 1)
+    return fnmatchcase(source, source_pattern) and fnmatchcase(
+        destination, destination_pattern
+    )
 
 
 def ref_divergence(
@@ -75,6 +88,25 @@ def remote_default_branch(engine: Any, repo: Path) -> tuple[str, str]:
                 if fetched.returncode != 0:
                     return "", tail(fetched.stderr or fetched.stdout) or (
                         f"could not fetch origin default branch {branch}"
+                    )
+            fetch_refspec = f"+refs/heads/{branch}:{remote_ref}"
+            fetch_refspecs = engine.output(
+                repo, "config", "--get-all", "remote.origin.fetch"
+            ).splitlines()
+            if not any(
+                fetch_refspec_maps(
+                    spec,
+                    f"refs/heads/{branch}",
+                    remote_ref,
+                )
+                for spec in fetch_refspecs
+            ):
+                configured = engine.run(
+                    repo, "config", "--add", "remote.origin.fetch", fetch_refspec
+                )
+                if configured.returncode != 0:
+                    return "", tail(configured.stderr or configured.stdout) or (
+                        f"could not configure fetch for origin default branch {branch}"
                     )
             cached = engine.run(repo, "remote", "set-head", "origin", branch)
             if cached.returncode != 0:
@@ -166,16 +198,47 @@ def switch_to_branch(
             repo,
             "switch",
             "--quiet",
-            "--track",
             "-c",
             branch,
             remote_ref,
         )
     if switched.returncode != 0:
         return False, tail(switched.stderr or switched.stdout) or f"could not switch to {branch}"
-    tracked = engine.run(repo, "branch", "--set-upstream-to", remote_ref, branch)
-    if tracked.returncode != 0:
-        return False, tail(tracked.stderr or tracked.stdout) or "could not set branch upstream"
+    tracked, tracking_error = set_branch_upstream(
+        engine, repo, branch=branch, remote_ref=remote_ref
+    )
+    if not tracked:
+        return False, tracking_error
+    return True, ""
+
+
+def set_branch_upstream(
+    engine: Any,
+    repo: Path,
+    *,
+    branch: str,
+    remote_ref: str,
+) -> tuple[bool, str]:
+    remote, separator, remote_branch = remote_ref.partition("/")
+    if not separator or not remote or not remote_branch:
+        return False, f"invalid remote tracking ref: {remote_ref}"
+    configured_remote = engine.run(
+        repo, "config", f"branch.{branch}.remote", remote
+    )
+    if configured_remote.returncode != 0:
+        return False, tail(configured_remote.stderr or configured_remote.stdout) or (
+            "could not set branch remote"
+        )
+    configured_merge = engine.run(
+        repo,
+        "config",
+        f"branch.{branch}.merge",
+        f"refs/heads/{remote_branch}",
+    )
+    if configured_merge.returncode != 0:
+        return False, tail(configured_merge.stderr or configured_merge.stdout) or (
+            "could not set branch merge ref"
+        )
     return True, ""
 
 
