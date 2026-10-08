@@ -74,7 +74,7 @@ class AutomationPolicy:
     duplicate_strategy: str
     respect_leases: bool
     submodules: bool = False
-    publish: bool = True
+    publish: bool = False
 
     def json_record(self) -> dict[str, object]:
         return asdict(self)
