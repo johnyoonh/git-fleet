@@ -198,7 +198,6 @@ def sync_one(
         allowed_submodule_drift = (
             dirty
             and automation.submodules
-            and branch == target_branch
             and submodule_pointer_drift_is_safe(engine, repo)
         )
         if branch == "HEAD" and not automation.recover_detached:

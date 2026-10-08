@@ -103,6 +103,102 @@ grep -q 'publication disabled by policy' "$TMP/publish-disabled.jsonl"
 [[ "$(git --git-dir="$PUBLISH_ORIGIN" rev-parse refs/heads/main)" == "$PUBLISH_REMOTE_BEFORE" ]]
 [[ "$(git -C "$PUBLISH_CLONE" rev-parse HEAD)" == "$DISABLED_HEAD" ]]
 
+SUBMODULE_ORIGIN="$TMP/submodule-origin.git"
+SUBMODULE_SEED="$TMP/submodule-seed"
+PARENT_ORIGIN="$TMP/parent-origin.git"
+PARENT_SEED="$TMP/parent-seed"
+PARENT_CLONE="$TMP/parent-clone"
+mkdir -p "$SUBMODULE_SEED" "$PARENT_SEED"
+git init -q --bare "$SUBMODULE_ORIGIN"
+git init -q -b main "$SUBMODULE_SEED"
+git -C "$SUBMODULE_SEED" config user.email "git-fleet-test@example.invalid"
+git -C "$SUBMODULE_SEED" config user.name "git-fleet test"
+printf 'submodule-v1\n' > "$SUBMODULE_SEED/file.txt"
+git -C "$SUBMODULE_SEED" add file.txt
+git -C "$SUBMODULE_SEED" commit -qm submodule-v1
+git -C "$SUBMODULE_SEED" remote add origin "$SUBMODULE_ORIGIN"
+git -C "$SUBMODULE_SEED" push -q -u origin main
+git --git-dir="$SUBMODULE_ORIGIN" symbolic-ref HEAD refs/heads/main
+SUBMODULE_V1=$(git -C "$SUBMODULE_SEED" rev-parse HEAD)
+
+git init -q --bare "$PARENT_ORIGIN"
+git init -q -b main "$PARENT_SEED"
+git -C "$PARENT_SEED" config user.email "git-fleet-test@example.invalid"
+git -C "$PARENT_SEED" config user.name "git-fleet test"
+git -C "$PARENT_SEED" -c protocol.file.allow=always submodule add -q "$SUBMODULE_ORIGIN" dependency
+git -C "$PARENT_SEED/dependency" checkout -q --detach "$SUBMODULE_V1"
+git -C "$PARENT_SEED" add .gitmodules dependency
+git -C "$PARENT_SEED" commit -qm parent-v1
+git -C "$PARENT_SEED" remote add origin "$PARENT_ORIGIN"
+git -C "$PARENT_SEED" push -q -u origin main
+git --git-dir="$PARENT_ORIGIN" symbolic-ref HEAD refs/heads/main
+git -C "$PARENT_SEED" branch feature
+git -C "$PARENT_SEED" push -q origin feature
+
+printf 'submodule-v2\n' > "$SUBMODULE_SEED/file.txt"
+git -C "$SUBMODULE_SEED" add file.txt
+git -C "$SUBMODULE_SEED" commit -qm submodule-v2
+git -C "$SUBMODULE_SEED" push -q origin main
+SUBMODULE_V2=$(git -C "$SUBMODULE_SEED" rev-parse HEAD)
+git -C "$PARENT_SEED/dependency" fetch -q origin main
+git -C "$PARENT_SEED/dependency" checkout -q --detach "$SUBMODULE_V2"
+printf 'submodule-v3\n' > "$SUBMODULE_SEED/file.txt"
+git -C "$SUBMODULE_SEED" add file.txt
+git -C "$SUBMODULE_SEED" commit -qm submodule-v3
+git -C "$SUBMODULE_SEED" push -q origin main
+SUBMODULE_V3=$(git -C "$SUBMODULE_SEED" rev-parse HEAD)
+git -C "$PARENT_SEED/dependency" fetch -q origin main
+git -C "$PARENT_SEED/dependency" checkout -q --detach "$SUBMODULE_V3"
+git -C "$PARENT_SEED" add dependency
+git -C "$PARENT_SEED" commit -qm parent-v2
+git -C "$PARENT_SEED" push -q origin main
+
+git -c protocol.file.allow=always clone -q --branch feature "$PARENT_ORIGIN" "$PARENT_CLONE"
+git -C "$PARENT_CLONE" -c protocol.file.allow=always submodule update --init --quiet
+git -C "$PARENT_CLONE/dependency" switch -q -c child-local "$SUBMODULE_V2"
+[[ -n "$(git -C "$PARENT_CLONE" status --porcelain)" ]]
+PARENT_SLUG="${PARENT_ORIGIN%.git}"
+printf '%s\t%s\tauto-submodules\tignore\n' "$PARENT_SLUG" "$PARENT_CLONE" > "$TMP/submodule-registry.tsv"
+cat > "$TMP/submodule-policy.toml" <<'TOML'
+version = 1
+level = "full"
+TOML
+
+if ! HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" \
+  GIT_FLEET_REGISTRY="$TMP/submodule-registry.tsv" \
+  GIT_FLEET_DYNAMIC_REGISTRY="$TMP/submodule-discovered.tsv" \
+  GIT_FLEET_POLICY="$TMP/submodule-policy.toml" \
+  GIT_FLEET_POLICY_STATE="$TMP/submodule-state.toml" \
+  GIT_FLEET_STATE_DIR="$TMP/submodule-state" \
+  "$ROOT/bin/git-fleet" sync --registry-only --repo "$PARENT_CLONE" --set submodules=true --json > "$TMP/submodule-sync.jsonl"; then
+  cat "$TMP/submodule-sync.jsonl" >&2
+  exit 1
+fi
+if ! grep -q '"event": "SYNCED"' "$TMP/submodule-sync.jsonl"; then
+  cat "$TMP/submodule-sync.jsonl" >&2
+  exit 1
+fi
+[[ "$(git -C "$PARENT_CLONE" branch --show-current)" == main ]]
+[[ "$(git -C "$PARENT_CLONE" rev-parse HEAD)" == "$(git --git-dir="$PARENT_ORIGIN" rev-parse refs/heads/main)" ]]
+[[ "$(git -C "$PARENT_CLONE/dependency" rev-parse HEAD)" == "$SUBMODULE_V2" ]]
+[[ "$(git -C "$PARENT_CLONE/dependency" branch --show-current)" == child-local ]]
+[[ -n "$(git -C "$PARENT_CLONE" status --porcelain)" ]]
+if ! HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/config" XDG_STATE_HOME="$TMP/state" \
+  GIT_FLEET_REGISTRY="$TMP/submodule-registry.tsv" \
+  GIT_FLEET_DYNAMIC_REGISTRY="$TMP/submodule-discovered.tsv" \
+  GIT_FLEET_POLICY="$TMP/submodule-policy.toml" \
+  GIT_FLEET_POLICY_STATE="$TMP/submodule-state.toml" \
+  GIT_FLEET_STATE_DIR="$TMP/submodule-state" \
+  "$ROOT/bin/git-fleet" sync --registry-only --repo "$PARENT_CLONE" --set submodules=true --json > "$TMP/submodule-repeat.jsonl"; then
+  cat "$TMP/submodule-repeat.jsonl" >&2
+  exit 1
+fi
+if ! grep -q 'clean submodule pointer drift remains' "$TMP/submodule-repeat.jsonl"; then
+  cat "$TMP/submodule-repeat.jsonl" >&2
+  exit 1
+fi
+[[ "$(git -C "$PARENT_CLONE/dependency" rev-parse HEAD)" == "$SUBMODULE_V2" ]]
+
 DISCOVERY_ROOT="$TMP/discovery"
 PRIMARY="$TMP/primary"
 ORDINARY="$DISCOVERY_ROOT/ordinary"
