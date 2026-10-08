@@ -315,6 +315,36 @@ assert not wide_error, wide_error
 assert repo_sync.output(wide_clone, "config", "--get-all", "remote.origin.fetch") == (
     "+refs/heads/*:refs/remotes/origin/*"
 )
+subprocess.run(["git", "-C", str(default_seed), "switch", "-q", "main"], check=True)
+(default_seed / "default.txt").write_text("updated default branch\n")
+subprocess.run(["git", "-C", str(default_seed), "add", "default.txt"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "commit", "-qm", "update main"], check=True)
+subprocess.run(["git", "-C", str(default_seed), "push", "-q", "origin", "main"], check=True)
+updated_default = repo_sync.output(default_seed, "rev-parse", "HEAD")
+subprocess.run(["git", "-C", str(wide_clone), "fetch", "--quiet", "--prune"], check=True)
+assert repo_sync.output(wide_clone, "rev-parse", "refs/remotes/origin/main") == updated_default
+
+excluded_clone = tmp / "default-branch-excluded-clone"
+subprocess.run([
+    "git", "clone", "-q", "--branch", "feature/minutos", "--single-branch",
+    str(default_origin), str(excluded_clone),
+], check=True)
+subprocess.run([
+    "git", "-C", str(excluded_clone), "config", "--add", "remote.origin.fetch",
+    "+refs/heads/*:refs/remotes/origin/*",
+], check=True)
+subprocess.run([
+    "git", "-C", str(excluded_clone), "config", "--add", "remote.origin.fetch",
+    "^refs/heads/main",
+], check=True)
+subprocess.run([
+    "git", "-C", str(excluded_clone), "update-ref", "-d", "refs/remotes/origin/main",
+], check=True)
+excluded_branch, excluded_error = reconcile_git.remote_default_branch(
+    repo_sync, excluded_clone
+)
+assert excluded_branch == "", excluded_branch
+assert "excluded by remote.origin.fetch" in excluded_error, excluded_error
 
 # An incomplete stash must be restored if a dirty submodule keeps the
 # superproject worktree from becoming clean.

@@ -76,6 +76,18 @@ def remote_default_branch(engine: Any, repo: Path) -> tuple[str, str]:
         )
         if match is not None:
             branch = match.group(1)
+            source_ref = f"refs/heads/{branch}"
+            fetch_refspecs = engine.output(
+                repo, "config", "--get-all", "remote.origin.fetch"
+            ).splitlines()
+            if any(
+                spec.startswith("^")
+                and fnmatchcase(source_ref, spec.removeprefix("^"))
+                for spec in fetch_refspecs
+            ):
+                return "", (
+                    f"origin default branch {branch} is excluded by remote.origin.fetch"
+                )
             remote_ref = f"refs/remotes/origin/{branch}"
             if not ref_exists(engine, repo, remote_ref):
                 fetched = engine.run(
@@ -83,20 +95,17 @@ def remote_default_branch(engine: Any, repo: Path) -> tuple[str, str]:
                     "fetch",
                     "--quiet",
                     "origin",
-                    f"+refs/heads/{branch}:{remote_ref}",
+                    f"+{source_ref}:{remote_ref}",
                 )
                 if fetched.returncode != 0:
                     return "", tail(fetched.stderr or fetched.stdout) or (
                         f"could not fetch origin default branch {branch}"
                     )
             fetch_refspec = f"+refs/heads/{branch}:{remote_ref}"
-            fetch_refspecs = engine.output(
-                repo, "config", "--get-all", "remote.origin.fetch"
-            ).splitlines()
             if not any(
                 fetch_refspec_maps(
                     spec,
-                    f"refs/heads/{branch}",
+                    source_ref,
                     remote_ref,
                 )
                 for spec in fetch_refspecs
