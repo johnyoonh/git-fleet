@@ -2,24 +2,11 @@
 
 Policy-driven synchronization and reconciliation for a fleet of local Git repositories.
 
-`git-fleet` grew out of a workstation automation tool for keeping many Git checkouts aligned with their remotes without throwing away local work. The standalone project is being extracted in stages so the reusable engine is independent of any particular dotfiles manager, scheduler, GitHub account, or machine layout.
+`git-fleet` grew out of workstation automation for keeping Git checkouts aligned
+without throwing away local work. The reusable engine is independent of the
+scheduler, GitHub account, dotfiles manager, and machine layout.
 
-## Goals
-
-- inspect many local repositories without mutating them;
-- fetch and report ahead/behind, dirty, branch, and upstream state;
-- reconcile eligible repositories to their remote default branches;
-- preserve dirty work and local commits before integration;
-- keep recovery refs before history-changing reconciliation;
-- apply global and per-repository automation policy;
-- publish safely-ahead default-branch commits with ordinary non-force pushes;
-- work as a normal CLI, from schedulers, or from event-driven automation.
-
-## Status
-
-Early extraction. The first milestone moves the tested fleet inspection, policy, and reconciliation core out of its original dotfiles repository. GitHub PR integration and platform-specific scheduling remain separate until the core boundary is stable.
-
-## CLI
+## Commands
 
 ```sh
 git-fleet status
@@ -27,23 +14,53 @@ git-fleet fetch
 git-fleet sync --dry-run
 git-fleet sync --only owner/repository
 git-fleet policy show
+git-fleet verify-pr --repo /path/to/repo --pr 123 --checks /trusted/checks.json --output /tmp/receipt.json --trust-code
 ```
 
-Configuration defaults to `${XDG_CONFIG_HOME:-~/.config}/git-fleet` and runtime state defaults to `${XDG_STATE_HOME:-~/.local/state}/git-fleet`.
+Configuration defaults to `${XDG_CONFIG_HOME:-~/.config}/git-fleet`; runtime state
+uses `${XDG_STATE_HOME:-~/.local/state}/git-fleet`.
 
-The `publish` policy setting controls whether a successful reconciliation may
-push committed default-branch work to `origin`. It defaults to `false` for all profiles. Set `publish = true` explicitly
-for the fleet or one repository to permit a normal, non-force push of committed
-default-branch history after safe reconciliation. Without that opt-in, sync
-preserves local commits without publishing them.
+## Publication is not bypass authorization
 
-## Safety model
+`publish` defaults to `false` for **every** automation profile. An explicit
+`publish=true` still cannot publish directly to a github.com default branch or
+any protected branch. Unknown protection/access state defers publication rather
+than trying the write with elevated credentials. Local/non-GitHub transports
+retain the existing opt-in, non-force publication behavior; enterprise-host
+protection discovery is not inferred from github.com policy.
 
-The reconciliation engine does not use force-push or hard-reset as normal recovery mechanisms. Before rebasing divergent local history it creates a recovery ref, and dirty work is snapshotted before worktree mutation when policy allows it.
+Default-branch work must go through a task branch and PR. Neither successful
+reconciliation nor an admin token nor a passing local test is merge authority.
+`github-agent-router` owns merge evaluation and the native PR merge operation.
 
-Automatic root discovery ignores linked Git worktrees. Task worktrees are isolated execution surfaces, not generic fleet mutation targets; a linked worktree is touched only when it is explicitly registered or directly targeted.
+## Isolated verification and repair lineage
 
-Start with `git-fleet sync --dry-run` and a small registry before enabling unattended reconciliation.
+`verify-pr` leases one source PR, constructs its actual base-plus-head merge in a
+dedicated worktree, runs an explicit trusted argv-based check plan, and emits a
+revision-bound receipt. `--include-pr` adds explicitly selected repair PR heads to
+the tested candidate. Failure, tracked-file mutation, conflicts, timeouts, or
+head/base movement invalidate the receipt. Existing local work is preserved.
+
+A worktree is **not a security sandbox**. `--trust-code` is required; run untrusted
+code on disposable, credential-isolated workers. Test subprocesses receive an
+allowlisted environment and temporary HOME, not provider tokens. Receipts are
+HMAC-signed when `GIT_FLEET_EVIDENCE_KEY` is supplied by a trusted executor.
+Unsigned receipts are informational, never merge approval.
+
+`integrate-fix` can then integrate that exact tested repair tree into the original
+`chatgpt/` PR branch using an ordinary push. It rejects stale/unsigned evidence,
+protected targets, and changed trees. The new source head must be reverified and
+recertified; a Jules-authored repair is not inherently safe.
+
+Read [verification, repair integration and deployment boundaries](docs/VERIFICATION.md).
+
+## Reconciliation safety
+
+The engine does not use force-push or hard-reset as normal recovery mechanisms.
+It creates recovery refs before divergent-history rebases, snapshots dirty work
+when policy permits it, and honors active leases. Automatic root discovery ignores
+linked worktrees unless explicitly registered or targeted. Start with a small
+registry and `git-fleet sync --dry-run` before unattended reconciliation.
 
 ## License
 

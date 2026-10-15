@@ -1,17 +1,22 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
 permissions:
   contents: read
-
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Administrator opt-in only; never send fork code to a local runner.
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - name: Run smoke tests
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run existing smoke tests
         run: bash tests/test_cli.sh
+      - name: Run delivery regressions
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Compile Python
+        run: python3 -W error -m compileall -q src tests
