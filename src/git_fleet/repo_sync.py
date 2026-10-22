@@ -523,6 +523,8 @@ def discover_repositories(roots: list[Path]) -> list[Path]:
     repos: set[Path] = set()
     ignored = {
         ".build",
+        "build",
+        "SourcePackages",
         ".cache",
         ".venv",
         "DerivedData",

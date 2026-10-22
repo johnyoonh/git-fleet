@@ -230,6 +230,7 @@ linked = Path(sys.argv[4]).resolve()
 for cached_repo in (
     root / ".build" / "checkouts" / "CachedSwiftPackage",
     root / "build" / "DerivedData" / "SourcePackages" / "checkouts" / "CachedSwiftPackage",
+    root / "build" / "SourcePackages" / "repositories" / "CachedSPM",
 ):
     (cached_repo / ".git").mkdir(parents=True)
 found = set(repo_sync.discover_repositories([root]))
@@ -238,6 +239,7 @@ assert linked not in found, found
 assert repo_sync.discover_repositories([linked]) == []
 assert not any(str(repo).startswith(str(root / ".build")) for repo in found), found
 assert not any("/DerivedData/" in str(repo) for repo in found), found
+assert not any("/SourcePackages/" in str(repo) for repo in found), found
 PY
 
 python3 - "$ROOT" "$TMP" <<'PY'
